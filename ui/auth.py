@@ -6,7 +6,10 @@ Uses local PBKDF2 HMAC-SHA256 password hashing stored in SQLite.
 """
 
 import streamlit as st
-from database.database import create_user, authenticate_user
+try:
+    from database import create_user, authenticate_user
+except ImportError:
+    from database.database import create_user, authenticate_user
 
 
 def render_auth_page():

@@ -12,5 +12,9 @@ from .database import (
     get_all_settings,
     get_permissions,
     set_permission,
-    update_scan_action
+    update_scan_action,
+    create_user,
+    authenticate_user,
+    hash_password,
+    verify_password
 )
