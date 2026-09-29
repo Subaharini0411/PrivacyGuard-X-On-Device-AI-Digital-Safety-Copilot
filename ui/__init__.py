@@ -9,4 +9,5 @@ from .history import render_history
 from .settings import render_settings
 from .guidelines import render_guidelines
 from .challenge import render_challenge
+from .auth import render_auth_page
 from .styles import get_custom_css

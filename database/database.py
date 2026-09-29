@@ -63,6 +63,18 @@ def init_db():
     )
     """)
 
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        salt TEXT NOT NULL,
+        full_name TEXT DEFAULT '',
+        created_at DATETIME NOT NULL
+    )
+    """)
+
     # Seed default settings if empty
     default_settings = {
         "dark_mode": "true",
@@ -294,6 +306,109 @@ def set_permission(permission_key: str, granted: bool):
     """, (1 if granted else 0, datetime.now().isoformat(), permission_key))
     conn.commit()
     conn.close()
+
+
+# ==========================================
+# USER AUTHENTICATION & ACCOUNT SYSTEM
+# ==========================================
+import hashlib
+import secrets
+from typing import Tuple
+
+
+def hash_password(password: str, salt_hex: Optional[str] = None) -> Tuple[str, str]:
+    """Hashes a password with PBKDF2 HMAC SHA-256 and unique salt."""
+    if salt_hex is None:
+        salt_bytes = secrets.token_bytes(16)
+        salt_hex = salt_bytes.hex()
+    else:
+        salt_bytes = bytes.fromhex(salt_hex)
+
+    pwd_hash = hashlib.pbkdf2_hmac(
+        'sha256',
+        password.encode('utf-8'),
+        salt_bytes,
+        100_000
+    ).hex()
+    return pwd_hash, salt_hex
+
+
+def verify_password(password: str, salt_hex: str, expected_hash: str) -> bool:
+    """Verifies a plain password against the stored salt and hash."""
+    calc_hash, _ = hash_password(password, salt_hex)
+    return secrets.compare_digest(calc_hash, expected_hash)
+
+
+def create_user(username: str, email: str, password: str, full_name: str = "") -> Tuple[bool, str]:
+    """Registers a new user account with validated constraints."""
+    username = username.strip().lower()
+    email = email.strip().lower()
+
+    if not username or len(username) < 3:
+        return False, "Username must be at least 3 characters long."
+    if not email or "@" not in email or "." not in email:
+        return False, "Please provide a valid email address."
+    if not password or len(password) < 6:
+        return False, "Password must be at least 6 characters long."
+
+    pwd_hash, salt_hex = hash_password(password)
+    now_iso = datetime.now().isoformat()
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute("""
+            INSERT INTO users (username, email, password_hash, salt, full_name, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (username, email, pwd_hash, salt_hex, full_name.strip(), now_iso))
+        conn.commit()
+        conn.close()
+        return True, "Account created successfully! You can now log in."
+    except sqlite3.IntegrityError as e:
+        conn.close()
+        err_msg = str(e).lower()
+        if "username" in err_msg:
+            return False, "Username is already taken. Please choose another."
+        elif "email" in err_msg:
+            return False, "An account with this email already exists. Please log in."
+        return False, "User with these credentials already exists."
+    except Exception as e:
+        conn.close()
+        return False, f"Failed to register user: {str(e)}"
+
+
+def authenticate_user(username_or_email: str, password: str) -> Tuple[bool, Optional[Dict[str, Any]], str]:
+    """Authenticates a user via username or email."""
+    identifier = username_or_email.strip().lower()
+    if not identifier or not password:
+        return False, None, "Please provide both identifier and password."
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT * FROM users WHERE username = ? OR email = ?
+    """, (identifier, identifier))
+    row = cursor.fetchone()
+    conn.close()
+
+    if not row:
+        return False, None, "Invalid username or password."
+
+    user_dict = dict(row)
+    if verify_password(password, user_dict["salt"], user_dict["password_hash"]):
+        # Do not leak hash and salt
+        safe_user = {
+            "id": user_dict["id"],
+            "username": user_dict["username"],
+            "email": user_dict["email"],
+            "full_name": user_dict["full_name"],
+            "created_at": user_dict["created_at"]
+        }
+        return True, safe_user, "Authentication successful."
+    else:
+        return False, None, "Invalid username or password."
 
 
 # Auto-initialize database on import
